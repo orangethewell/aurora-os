@@ -22,7 +22,7 @@ use core::panic::PanicInfo;
 
 use bootloader_api::{config::Mapping, BootloaderConfig};
 use memory::BootInfoFrameAllocator;
-use task::{simple_executor::SimpleExecutor, Task};
+use task::{executor::Executor, simple_executor::SimpleExecutor, Task};
 use x2apic::lapic::{xapic_base, LocalApicBuilder};
 use x86_64::{structures::paging::Translate, VirtAddr};
 
@@ -58,10 +58,14 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     .expect("heap initialization failed");
     serial_println!("Heap initialized!");
 
+    let rsdp: Option<u64> = boot_info.rsdp_addr.take();
+
     unsafe {
         interrupts::disable_pic();
-        interrupts::init_lapic(physical_memory_offset);
+        interrupts::init_apic(rsdp.expect("Couldn't get rsdp addr.") as usize, phys_mem_offset, &mut mapper, &mut frame_allocator);
     }
+
+    serial_println!("APIC (IO|LAPIC) initialized!");
 
     let fb_info = boot_info.framebuffer.as_ref().unwrap();
     let fb_addr = VirtAddr::new(fb_info.buffer().as_ptr() as u64);
@@ -88,13 +92,14 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     tty::activate_tty(tty0);
     kprintln!("TTY Initialized!");
 
-    let mut executor = SimpleExecutor::new();
+    let mut executor = Executor::new();
     executor.spawn(Task::new(example_task()));
+    executor.spawn(Task::new(task::keyboard::print_keypresses())); // new
     executor.run();
 
     kprintln!("Welcome to Aurora OS!");
 
-    hlt_loop();
+    hlt_loop()
 }
 
 pub fn hlt_loop() -> ! {
