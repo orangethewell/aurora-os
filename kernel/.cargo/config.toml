@@ -1,0 +1,1 @@
+build-std = ["core", "compiler_builtins", "alloc"]

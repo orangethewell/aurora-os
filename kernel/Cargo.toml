@@ -1,0 +1,24 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kernel"
+test = false
+bench = false
+opt-level = "z"
+
+[dependencies]
+bootloader_api = "0.11.2"
+x86_64 = "0.15"
+spin = "0.10"
+pic8259 = "0.11"
+uart_16550 = "0.3"
+lazy_static = { version = "1.5", default-features = false, features = ["spin_no_std"] }
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+conquer-once = { version = "0.4", default-features = false }
+linked_list_allocator = "0.10"
+embedded-graphics = "0.8"
+x2apic = "0.5.0"

@@ -1,0 +1,16 @@
+
+[package]
+name = "aurora-os"
+version = "0.1.0"
+edition = "2021"
+default-run = "aurora-os"
+
+[workspace]
+members = ["kernel"]
+
+[dependencies]
+ovmf-prebuilt = "0.2"
+
+[build-dependencies]
+kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
+bootloader = "0.11.3"
