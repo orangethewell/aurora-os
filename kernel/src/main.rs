@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
+#![feature(naked_functions)]
 
 #[macro_use]
 extern crate alloc;
@@ -17,14 +18,17 @@ mod memory;
 mod allocator;
 
 mod task;
+mod process;
+mod syscall;
 
-use core::panic::PanicInfo;
+mod ide;
+
+use core::{arch::asm, panic::PanicInfo};
 
 use bootloader_api::{config::Mapping, BootloaderConfig};
 use memory::BootInfoFrameAllocator;
-use task::{executor::Executor, simple_executor::SimpleExecutor, Task};
-use x2apic::lapic::{xapic_base, LocalApicBuilder};
-use x86_64::{structures::paging::Translate, VirtAddr};
+use task::{executor::Executor, Task};
+use x86_64::{instructions::port::Port, VirtAddr};
 
 pub const BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -42,6 +46,69 @@ async fn example_task() {
     let number = async_number().await;
     kprintln!("async number: {}", number);
 }
+
+
+fn kernel_thread_main() {
+    kprintln!("Kernel thread start");
+
+    // Launch another kernel thread
+    process::new_kernel_thread(test_kernel_fn2);
+
+    loop {
+        kprintln!("<< 1 >>");
+        x86_64::instructions::hlt();
+    }
+}
+
+fn test_kernel_fn2() {
+    kprintln!("Hello from kernel function 2!");
+    loop {
+        kprintln!("       << 2 >>");
+        x86_64::instructions::hlt();
+    }
+}
+
+unsafe fn pci_config_read(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+    let address: u32 =
+        (1 << 31) | // habilita
+        ((bus as u32) << 16) |
+        ((device as u32) << 11) |
+        ((function as u32) << 8) |
+        ((offset as u32) & 0xFC);
+
+    let mut port_cf8 = Port::new(0xCF8);
+    let mut port_cfc = Port::new(0xCFC);
+    port_cf8.write(address);
+    port_cfc.read()
+}
+
+pub unsafe fn scan_pci() {
+    for bus in 0..=255 {
+        for device in 0..32 {
+            for function in 0..8 {
+                let data = pci_config_read(bus, device, function, 0);
+                let vendor_id = (data & 0xFFFF) as u16;
+                let device_id = ((data >> 16) & 0xFFFF) as u16;
+
+                if vendor_id != 0xFFFF {
+                    kprintln!(
+                        "PCI Device encontrado: Bus {:02x}, Dev {:02x}, Func {:x} => Vendor {:04x}, Device {:04x}",
+                        bus, device, function, vendor_id, device_id
+                    );
+                }
+
+                // Apenas a função 0 existe, a menos que seja um dispositivo multifunção
+                if function == 0 {
+                    let header_type = (pci_config_read(bus, device, function, 0x0C) >> 16) & 0xFF;
+                    if (header_type & 0x80) == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     gdt::init();
@@ -91,6 +158,23 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     let tty0 = tty::TTY::new(display);
     tty::activate_tty(tty0);
     kprintln!("TTY Initialized!");
+
+    unsafe { scan_pci();}
+    for device in ide::detect_ide_devices().iter().flatten() {
+        let model_str = core::str::from_utf8(&device.model).unwrap_or("???").trim();
+        kprintln!(
+            "Dispositivo IDE: {} {} - Modelo: {}",
+            device.channel,
+            device.drive,
+            model_str
+        );
+    }
+
+    process::new_user_thread(
+        include_bytes!("../../target/x86_64-unknown-none/debug/hello"),
+        &mut mapper,
+        &mut frame_allocator
+    );
 
     let mut executor = Executor::new();
     executor.spawn(Task::new(example_task()));

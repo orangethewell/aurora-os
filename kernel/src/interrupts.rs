@@ -1,3 +1,4 @@
+use core::arch::{asm, naked_asm};
 use core::ptr::NonNull;
 use alloc::boxed::Box;
 use x2apic::lapic::{xapic_base, LocalApic, LocalApicBuilder};
@@ -9,10 +10,13 @@ use x86_64::instructions::port::Port;
 use lazy_static::lazy_static;
 use x86_64::structures::paging::{FrameAllocator, Mapper, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
-use crate::gdt;
+use crate::{gdt, process};
+use crate::process::Context;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
+
+
 
 pub fn disable_pic() {
     unsafe {
@@ -206,11 +210,17 @@ lazy_static! {
         }
         serial_println!("IDT - Double Fault loaded");
 
-        idt.page_fault.set_handler_fn(page_fault_handler);
+        unsafe {
+            idt.page_fault.set_handler_fn(page_fault_handler)
+                .set_stack_index(gdt::PAGE_FAULT_IST_INDEX);
+        }
         serial_println!("IDT - Page Fault loaded");
 
-        idt[InterruptIndex::Timer.as_u8()]
-            .set_handler_fn(timer_interrupt_handler);
+        unsafe {
+            idt[InterruptIndex::Timer.as_u8()]
+                .set_handler_fn(timer_interrupt_handler)
+                .set_stack_index(gdt::TIMER_INTERRUPT_INDEX);
+        }
         serial_println!("IDT - APIC - Timer loaded");
 
         idt[InterruptIndex::Spurious.as_u8()]
@@ -220,8 +230,11 @@ lazy_static! {
         idt[InterruptIndex::Error.as_u8()]
             .set_handler_fn(error_interrupt_handler);
         serial_println!("IDT - APIC - Error loaded");
-        idt[InterruptIndex::Keyboard.as_u8()]
-            .set_handler_fn(keyboard_interrupt_handler);
+        unsafe {
+            idt[InterruptIndex::Keyboard.as_u8()]
+                .set_handler_fn(keyboard_interrupt_handler)
+                .set_stack_index(gdt::KEYBOARD_INTERRUPT_INDEX);
+        }
         serial_println!("IDT - IOAPIC - Keyboard loaded");
         // Adicionando exceções
         idt.divide_error.set_handler_fn(divide_error_handler);
@@ -233,7 +246,10 @@ lazy_static! {
         idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
         serial_println!("IDT - Invalid Opcode loaded");
 
-        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+        unsafe {
+            idt.general_protection_fault.set_handler_fn(general_protection_fault_handler)
+                .set_stack_index(gdt::GENERAL_PROTECTION_FAULT_IST_INDEX);
+        }
         serial_println!("IDT - General Protection Fault loaded");
 
         idt
@@ -264,11 +280,79 @@ extern "x86-interrupt" fn breakpoint_handler(
     kprintln!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(
-    _stack_frame: InterruptStackFrame)
-{
-    kprint!(".");
+extern "C" fn timer_handler(context_addr: usize) -> usize {
+    let next_stack = process::schedule_next(context_addr);
+
     send_eoi();
+    next_stack
+}
+
+#[naked]
+pub extern "x86-interrupt" fn timer_interrupt_handler (
+   _stack_frame: InterruptStackFrame) {
+  unsafe {
+    naked_asm!(
+        // Disable interrupts
+        "cli",
+        // Push registers
+        "push rax",
+        "push rbx",
+        "push rcx",
+        "push rdx",
+    
+        "push rdi",
+        "push rsi",
+        "push rbp",
+        "push r8",
+    
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+    
+        "push r13",
+        "push r14",
+        "push r15",
+    
+        // First argument in rdi with C calling convention
+        "mov rdi, rsp",
+        // Call the hander function
+        "call {handler}",
+        // New: stack pointer is in RAX
+        "cmp rax, 0",
+        "je 2f",        // if rax != 0 {
+        "mov rsp, rax", //   rsp = rax;
+        "2:",           // }
+    
+        // Pop scratch registers
+        "pop r15",
+        "pop r14",
+        "pop r13",
+    
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+    
+        "pop r8",
+        "pop rbp",
+        "pop rsi",
+        "pop rdi",
+    
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
+        // Enable interrupts
+        "sti",
+        // Interrupt return
+        "iretq",
+        // Note: Getting the handler pointer here using `sym` operand, because
+        // an `in` operand would clobber a register that we need to save, and we
+        // can't have two asm blocks
+        handler = sym timer_handler,
+    );
+  }
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(
