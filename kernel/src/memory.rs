@@ -1,5 +1,5 @@
 use x86_64::{
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB}, PhysAddr, VirtAddr
+    structures::paging::{mapper::MapToError, FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB}, PhysAddr, VirtAddr
 };
 
 use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
@@ -130,4 +130,35 @@ unsafe fn active_level_4_table(physical_memory_offset: VirtAddr)
     let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
 
     &mut *page_table_ptr
+}
+
+/// Map `[start_addr, start_addr + size)` 1:1 to freshly-allocated frames.
+///
+/// - `mapper` is your OffsetPageTable (implements Mapper<Size4KiB>)
+/// - `frame_allocator` is your BootInfoFrameAllocator
+/// - `flags` are the page flags (e.g. PRESENT | WRITABLE | USER_ACCESSIBLE)
+pub fn allocate_pages_mapper(
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    start_addr: VirtAddr,
+    size: u64,
+    flags: PageTableFlags,
+) -> Result<(), MapToError<Size4KiB>> {
+    // Compute the inclusive page range for the region
+    let end_addr = start_addr + size - 1;
+    let start_page = Page::containing_address(start_addr);
+    let end_page   = Page::containing_address(end_addr);
+
+    for page in Page::range_inclusive(start_page, end_page) {
+        // Allocate a frame and map it
+        let frame = frame_allocator
+            .allocate_frame()
+            .ok_or(MapToError::FrameAllocationFailed)?;
+        // map_to returns a MapperFlush for this page
+        unsafe {
+            mapper.map_to(page, frame, flags, frame_allocator)?
+                  .flush();
+        }
+    }
+    Ok(())
 }
