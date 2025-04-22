@@ -6,7 +6,7 @@ edition = "2021"
 default-run = "aurora-os"
 
 [workspace]
-members = ["kernel"]
+members = [ "hello","kernel"]
 
 [dependencies]
 ovmf-prebuilt = "0.2"

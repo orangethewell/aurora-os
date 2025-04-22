@@ -17,9 +17,11 @@ pic8259 = "0.11"
 uart_16550 = "0.3"
 acpi = "5.2"
 lazy_static = { version = "1.5", default-features = false, features = ["spin_no_std"] }
+object = { version = "0.36", default-features = false, features = ["read"] }
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 futures-util = { version = "0.3.4", default-features = false, features = ["alloc"]}
 crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+simple-fatfs = {version = "0.1.0-alpha.1", default-features = false }
 conquer-once = { version = "0.4", default-features = false }
 linked_list_allocator = "0.10"
 embedded-graphics = "0.8"
